@@ -1,0 +1,59 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.dll
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+site/
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime outputs
+out.txt
+logs/
+tmp/
+temp/
+*.log
+
+# Local data and experiment artifacts
+papers/
+data/
+artifacts/
+outputs/
+
+# IDE and OS files
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Notebook artifacts
+.ipynb_checkpoints/
+
+# Local packaging and editable install leftovers
+src/*.egg-info/
+

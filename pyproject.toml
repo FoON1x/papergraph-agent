@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperagent"
+version = "0.1.0"
+description = "PaperGraph-Agent: a GraphRAG research-paper ingestion and reasoning MVP."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bs4>=0.0.2",
+    "dashscope>=1.25.15",
+    "langchain>=1.2.13",
+    "langchain-community>=0.4.1",
+    "langchain-neo4j>=0.9.0",
+    "langchain-openai>=1.1.12",
+    "langchain-text-splitters>=1.1.1",
+    "neo4j>=5.28.0",
+    "pydantic-settings>=2.7.0",
+    "python-dotenv>=1.2.2",
+    "rapidfuzz>=3.10.0",
+    "rich>=13.9.0",
+    "typer>=0.15.0",
+    "unstructured[pdf]>=0.16.0",
+]
+
+[project.scripts]
+paperagent = "paperagent.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
