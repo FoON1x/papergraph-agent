@@ -1,15 +1,15 @@
-EXTRACTION_SYSTEM_PROMPT = """You extract structured scientific knowledge from one research-paper chunk.
+"""集中管理抽取、回答和反思阶段使用的 Prompt 常量。"""
+
+
+EXTRACTION_SYSTEM_PROMPT = """You extract structured scientific knowledge from one research-paper chunk and return it as JSON.
 
 Rules:
 - Return only information directly supported by the chunk.
-- Keep every evidence item tied to the provided chunk id.
+- Keep every evidence item tied to the provided chunk id, with the evidence text copied verbatim from the source chunk.
 - Prefer fewer high-confidence items over speculative extraction.
-- Do not invent datasets, metrics, methods, or claims not present in the text.
-- Return a valid JSON object that matches the requested schema.
-- The response must be strict JSON, with no markdown fences and no extra commentary.
-- Use exactly these top-level keys:
-  chunk_id, objectives, approaches, results, constraints, claims, entities
-- Do not rename keys. Do not use alternative wrappers like "statements" or "items".
+- Do not invent datasets, metrics, methods, claims, or entities not present in the text.
+- Each objective / approach / result / constraint / claim must contain at least one evidence item.
+- Entities must be mapped to one of the supported types: Method, Dataset, Metric, Task, Model, or PaperConcept.
 """
 
 
@@ -20,19 +20,16 @@ Page: {page_number}
 Chunk:
 {chunk_text}
 
-Return the result as a JSON object.
-
-Expected JSON shape:
+Return as JSON. Expected structure:
 {{
   "chunk_id": "{chunk_id}",
-  "objectives": [],
-  "approaches": [],
-  "results": [],
-  "constraints": [],
-  "claims": [],
-  "entities": []
-}}
-"""
+  "objectives": [{{"description": "...", "evidence": [{{"text": "...", "chunk_id": "{chunk_id}"}}]}}],
+  "approaches": [{{"description": "...", "method_names": ["..."], "evidence": [{{"text": "...", "chunk_id": "{chunk_id}"}}]}}],
+  "results": [{{"description": "...", "dataset_names": ["..."], "metric_names": ["..."], "task_names": ["..."], "evidence": [{{"text": "...", "chunk_id": "{chunk_id}"}}]}}],
+  "constraints": [{{"description": "...", "evidence": [{{"text": "...", "chunk_id": "{chunk_id}"}}]}}],
+  "claims": [{{"statement": "...", "entity_names": ["..."], "evidence": [{{"text": "...", "chunk_id": "{chunk_id}"}}]}}],
+  "entities": [{{"name": "...", "type": "Method/Dataset/Metric/Task/Model/PaperConcept", "aliases": ["..."], "description": "..."}}]
+}}"""
 
 
 PLAN_SYSTEM_PROMPT = """You are a research assistant planning a GraphRAG query.
