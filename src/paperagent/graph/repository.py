@@ -8,7 +8,7 @@ from paperagent.schemas import Entity, Evidence, ParsedDocument, PaperExtraction
 
 
 class GraphRepository:
-    """Neo4j persistence and local GraphRAG retrieval."""
+    """Neo4j 持久化层，同时承担本地 GraphRAG 检索职责。"""
 
     def __init__(
         self,
@@ -26,9 +26,11 @@ class GraphRepository:
         self._vector_store = None
 
     def close(self) -> None:
+        """关闭底层 Neo4j driver。"""
         self.driver.close()
 
     def paper_exists(self, title: str, collection: str = "default") -> bool:
+        """按归一化标题检查某篇论文是否已存在于指定 collection。"""
         normalized_title = normalize_title(title)
         query = """
         MATCH (paper:Paper)
@@ -46,6 +48,8 @@ class GraphRepository:
         return bool(rows and rows[0].get("exists"))
 
     def write_document(self, document: ParsedDocument, extraction: PaperExtraction) -> None:
+        """把解析结果和抽取结果写入 Neo4j。"""
+        # 先统一为所有 Chunk 生成 embedding；后续写 Chunk 节点时直接落库。
         chunk_embeddings = self.embedding_provider.embed_documents([chunk.text for chunk in document.chunks])
         chunk_embedding_by_id = {
             chunk.chunk_id: chunk_embeddings[index] for index, chunk in enumerate(document.chunks)
@@ -56,6 +60,8 @@ class GraphRepository:
             session.execute_write(self._write_extraction_tx, extraction)
 
     def local_search(self, question: str, collection: str = "default", top_k: int = 6) -> list[RetrievalHit]:
+        """在 Neo4j 向量索引上做本地相似度检索。"""
+        # 这里走的是 langchain-neo4j 的向量检索，而不是手写相似度计算。
         rows = self.get_vector_store().similarity_search_with_score(
             question,
             k=top_k,
@@ -73,9 +79,12 @@ class GraphRepository:
         ]
 
     def run_cypher(self, query: str, params: dict | None = None) -> list[dict]:
+        """执行只读 Cypher 查询，并返回字典列表。"""
         return self.get_langchain_graph().query(query, params=params or {})
 
     def cross_reference(self, entity_name: str, collection: str = "default", limit: int = 5) -> list[dict]:
+        """查询某个实体在多篇论文中的出现位置和证据。"""
+        # cross_reference 是给 Agent 做跨论文对照时用的便捷查询。
         query = """
         MATCH (paper:Paper {collection: $collection})-[:HAS_SECTION]->(:Section)-[:HAS_CHUNK]->(chunk:Chunk)-[:MENTIONS]->(entity:Entity)
         WHERE entity.canonical_name = $canonical_name OR toLower(entity.name) = toLower($entity_name)
@@ -98,6 +107,7 @@ class GraphRepository:
         )
 
     def _write_document_tx(self, tx, document: ParsedDocument, chunk_embedding_by_id: dict[str, list[float]]) -> None:
+        """事务内写入文档结构层：Paper / Section / Chunk。"""
         tx.run(
             """
             MERGE (paper:Paper {paper_id: $paper_id})
@@ -153,6 +163,8 @@ class GraphRepository:
                 )
 
     def _write_extraction_tx(self, tx, extraction: PaperExtraction) -> None:
+        """事务内写入语义层：Entity / Claim / Evidence / Result 等。"""
+        # 这里把抽取语义映射到图谱节点和关系；文档结构层已经在 _write_document_tx 落好了。
         tx.run(
             "MATCH (paper:Paper {paper_id: $paper_id}) SET paper.extracted_title = $title",
             paper_id=extraction.paper_id,
@@ -201,7 +213,9 @@ class GraphRepository:
                     self._connect_named_entity(tx, node_id, entity_name, "ABOUT")
 
     def _merge_entity(self, tx, entity: Entity, chunk_id: str) -> None:
+        """合并实体节点，并建立 Chunk -> Entity 的 MENTIONS 关系。"""
         canonical_name = canonicalize_entity(entity.canonical_name or entity.name)
+        # 先按基础标签 :Entity 合并，再补具体类型标签，避免唯一约束与多标签 MERGE 冲突。
         tx.run(
             """
             MATCH (chunk:Chunk {chunk_id: $chunk_id})
@@ -233,6 +247,7 @@ class GraphRepository:
         self._link_possible_same_as(tx, canonical_name)
 
     def _merge_semantic_node(self, tx, paper_id: str, label: str, relation: str, description: str) -> str:
+        """合并单个语义节点，并挂到 Paper 上。"""
         node_id = semantic_id(label, paper_id, description)
         tx.run(
             f"""
@@ -254,7 +269,9 @@ class GraphRepository:
         evidence_items: list[Evidence],
         supported_node_id: str,
     ) -> None:
+        """写入 evidence 节点，并建立 evidence 对语义节点的支撑关系。"""
         for evidence in evidence_items:
+            # Evidence 独立成节点，是为了让“主张”和“证据”在图里清晰分离。
             evidence_id = semantic_id("Evidence", evidence.chunk_id, evidence.text)
             tx.run(
                 """
@@ -273,6 +290,7 @@ class GraphRepository:
             )
 
     def _connect_named_entity(self, tx, source_node_id: str, entity_name: str, relation: str) -> None:
+        """按实体名连接语义节点和 Entity 节点。"""
         canonical_name = canonicalize_entity(entity_name)
         tx.run(
             f"""
@@ -287,6 +305,8 @@ class GraphRepository:
         )
 
     def _link_possible_same_as(self, tx, canonical_name: str) -> None:
+        """为高相似实体建立 SAME_AS 候选关系。"""
+        # 当前 MVP 的实体对齐是保守版：先用模糊匹配建 SAME_AS，不做激进自动合并。
         rows = tx.run(
             """
             MATCH (candidate:Entity)
@@ -310,9 +330,11 @@ class GraphRepository:
                 )
 
     def get_langchain_graph(self):
+        """惰性创建 LangChain 的 Neo4jGraph 读接口。"""
         if self._lc_graph is None:
             from langchain_neo4j import Neo4jGraph
 
+            # 读侧尽量复用 LangChain 官方集成，方便后续和 Agent / Tool 抽象对齐。
             self._lc_graph = Neo4jGraph(
                 url=self.settings.neo4j_uri,
                 username=self.settings.neo4j_user,
@@ -324,9 +346,11 @@ class GraphRepository:
         return self._lc_graph
 
     def get_vector_store(self):
+        """惰性创建 LangChain 的 Neo4jVector 向量存储接口。"""
         if self._vector_store is None:
             from langchain_neo4j import Neo4jVector
 
+            # retrieval_query 把命中的 Chunk 再挂上一些图谱上下文，方便问答时引用。
             retrieval_query = """
             OPTIONAL MATCH (node)-[:HAS_EVIDENCE]->(evidence:Evidence)-[:SUPPORTS]->(claim:Claim)
             WITH node, score,

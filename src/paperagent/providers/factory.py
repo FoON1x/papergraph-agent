@@ -4,6 +4,8 @@ from paperagent.providers.dashscope import DashScopeChatProvider, DashScopeEmbed
 
 
 def get_chat_provider(settings: Settings | None = None) -> ChatProvider:
+    """按配置返回聊天模型 provider。"""
+
     settings = settings or get_settings()
     if settings.llm_provider == "dashscope":
         return DashScopeChatProvider(settings)
@@ -11,6 +13,8 @@ def get_chat_provider(settings: Settings | None = None) -> ChatProvider:
 
 
 def get_embedding_provider(settings: Settings | None = None) -> EmbeddingProvider:
+    """按配置返回向量模型 provider。"""
+
     settings = settings or get_settings()
     if settings.llm_provider == "dashscope":
         return DashScopeEmbeddingProvider(settings)

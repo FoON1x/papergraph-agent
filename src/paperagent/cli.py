@@ -50,6 +50,7 @@ def doctor() -> None:
     )
 
     try:
+        # connectivity 检查放在这里做，能尽早发现 URI、用户名或密码问题。
         graph = GraphRepository(settings=settings)
         try:
             graph.driver.verify_connectivity()
@@ -78,6 +79,7 @@ def init_schema(
         manager = GraphSchemaManager(graph.driver, settings.neo4j_database)
         manager.init_schema()
         if embedding_dimensions:
+            # 只有显式给出维度时才创建向量索引，避免模型维度不明确时误建索引。
             manager.init_vector_indexes(embedding_dimensions)
         console.print("[green]Neo4j schema initialized.[/green]")
     finally:
@@ -111,6 +113,7 @@ def query(
 
     graph = GraphRepository()
     try:
+        # query 命令本身很薄，真正的查询逻辑会下沉到 RAG 层和 Agent 层。
         rag = LocalGraphRAG(graph)
         agent = ResearchAgent(rag)
         answer = agent.invoke(question, collection=collection)

@@ -7,7 +7,7 @@ SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
 class ChatProvider(Protocol):
-    """Provider-neutral chat model interface."""
+    """面向业务层的统一聊天模型接口。"""
 
     def extract_structured(self, prompt: str, schema: type[SchemaT]) -> SchemaT:
         """Return a Pydantic object extracted from the prompt."""
@@ -20,7 +20,7 @@ class ChatProvider(Protocol):
 
 
 class EmbeddingProvider(Protocol):
-    """Provider-neutral embedding model interface."""
+    """面向业务层的统一向量模型接口。"""
 
     def embed_query(self, text: str) -> list[float]:
         """Embed one query string."""

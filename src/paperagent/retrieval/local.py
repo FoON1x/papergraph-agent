@@ -8,7 +8,11 @@ from paperagent.schemas import QueryAnswer
 
 
 class LocalGraphRAG:
-    """Local GraphRAG query service backed by Neo4j vector search."""
+    """本地 GraphRAG 查询服务。
+
+    它是一个较轻的问答层：先做向量召回，再把证据拼给回答链。
+    更灵活的工具调用式问答则由上层 ResearchAgent 负责。
+    """
 
     def __init__(
         self,
@@ -26,7 +30,9 @@ class LocalGraphRAG:
         top_k: int = 6,
         plan: str | None = None,
     ) -> QueryAnswer:
+        """执行一次本地 GraphRAG 问答。"""
         hits = self.graph.local_search(question, collection=collection, top_k=top_k)
+        # 把召回证据拼成一个明确的文本块，方便回答链直接引用 chunk id。
         evidence = "\n\n".join(
             f"[{hit.id}] score={hit.score:.3f}\n{hit.text}" for hit in hits
         )
@@ -40,6 +46,8 @@ class LocalGraphRAG:
         return QueryAnswer(question=question, answer=answer, evidence=hits)
 
     def _build_answer_chain(self):
+        """构建回答阶段使用的 LangChain Runnable。"""
+        # 这里仍然采用标准 Runnable 组合，方便以后替换 Prompt 或模型。
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", ANSWER_SYSTEM_PROMPT),

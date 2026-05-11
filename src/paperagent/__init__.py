@@ -1,4 +1,4 @@
-"""PaperGraph-Agent core package."""
+"""PaperGraph-Agent 核心包。"""
 
 __all__ = ["__version__"]
 

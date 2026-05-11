@@ -2,6 +2,7 @@ __all__ = ["GraphRepository", "GraphSchemaManager"]
 
 
 def __getattr__(name: str):
+    # 延迟导入，避免在只用到部分模块时提前触发 Neo4j 相关依赖加载。
     if name == "GraphRepository":
         from paperagent.graph.repository import GraphRepository
 

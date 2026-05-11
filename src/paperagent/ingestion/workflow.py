@@ -8,6 +8,8 @@ from paperagent.schemas import PaperExtraction, ParsedDocument
 
 
 class IngestionState(TypedDict, total=False):
+    """LangGraph 导入工作流在各节点之间传递的状态。"""
+
     path: Path
     collection: str
     document: ParsedDocument
@@ -16,7 +18,7 @@ class IngestionState(TypedDict, total=False):
 
 
 class IngestionWorkflow:
-    """LangGraph workflow for one paper: parse -> extract -> write."""
+    """单篇论文的 LangGraph 工作流：parse -> extract -> write。"""
 
     def __init__(
         self,
@@ -41,15 +43,18 @@ class IngestionWorkflow:
         graph = StateGraph(IngestionState)
 
         def parse(state: IngestionState) -> IngestionState:
+            # parse 节点只负责把文件路径变成 ParsedDocument，不做模型调用。
             document = self.parser.parse_pdf(state["path"])
             document.metadata["collection"] = state.get("collection", "default")
             return {"document": document}
 
         async def extract(state: IngestionState) -> IngestionState:
+            # extract 节点是最耗时的一步：会按 chunk 并发调用 LLM。
             extraction = await self.extractor.extract_document(state["document"])
             return {"extraction": extraction}
 
         def write(state: IngestionState) -> IngestionState:
+            # write 节点把文档结构和抽取语义一起写入 Neo4j。
             self.graph.write_document(state["document"], state["extraction"])
             return {"paper_id": state["document"].paper_id}
 

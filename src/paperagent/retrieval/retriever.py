@@ -7,7 +7,7 @@ from paperagent.graph import GraphRepository
 
 
 class LocalGraphRetriever(BaseRetriever):
-    """LangChain retriever backed by Neo4j local vector search."""
+    """基于 Neo4j 向量检索的 LangChain Retriever。"""
 
     graph: GraphRepository
     collection: str = "default"
@@ -17,7 +17,9 @@ class LocalGraphRetriever(BaseRetriever):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_relevant_documents(self, query: str) -> list[Document]:
+        """执行一次检索，并把结果转换成 LangChain Document 列表。"""
         hits = self.graph.local_search(query, collection=self.collection, top_k=self.top_k)
+        # last_hits 会被 Agent 层取走，用于在最终答案里附带 evidence 列表。
         self.last_hits = hits
         return [
             Document(
