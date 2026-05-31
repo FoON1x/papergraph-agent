@@ -237,10 +237,11 @@ class GraphRepository:
             aliases=entity.aliases,
             description=entity.description,
         )
+        # 将Entity节点打上label
         tx.run(
             f"""
-            MATCH (entity:Entity {{canonical_name: $canonical_name}})
-            SET entity:{entity.type.value}
+            MATCH (node:Entity {{canonical_name: $canonical_name}})
+            SET node:{entity.type.value}
             """,
             canonical_name=canonical_name,
         )
@@ -305,8 +306,34 @@ class GraphRepository:
         )
 
     def _link_possible_same_as(self, tx, canonical_name: str) -> None:
-        """为高相似实体建立 SAME_AS 候选关系。"""
-        # 当前 MVP 的实体对齐是保守版：先用模糊匹配建 SAME_AS，不做激进自动合并。
+        """为高相似实体建立 SAME_AS 候选关系。
+
+        优先使用 APOC 的 Sorensen-Dice 相似度在库内过滤并建边；
+        若 APOC 不可用，再退回 Python 侧的 rapidfuzz 保守实现。
+        """
+        threshold = self.settings.entity_match_threshold / 100
+        try:
+            tx.run(
+                """
+                MATCH (a:Entity {canonical_name: $canonical_name})
+                MATCH (b:Entity)
+                WHERE b.canonical_name <> a.canonical_name
+                WITH a, b, apoc.text.sorensenDiceSimilarity(a.canonical_name, b.canonical_name) AS sim
+                WHERE sim > $threshold
+                MERGE (a)-[r:SAME_AS]-(b)
+                ON CREATE SET r.method = 'apoc_dice',
+                              r.score = sim
+                ON MATCH SET r.method = coalesce(r.method, 'apoc_dice'),
+                             r.score = coalesce(r.score, sim)
+                """,
+                canonical_name=canonical_name,
+                threshold=threshold,
+            ).consume()
+        except Exception:  # noqa: BLE001
+            self._link_possible_same_as_fallback(tx, canonical_name)
+
+    def _link_possible_same_as_fallback(self, tx, canonical_name: str) -> None:
+        """APOC 不可用时，退回 Python 侧的模糊匹配建边。"""
         rows = tx.run(
             """
             MATCH (candidate:Entity)
@@ -318,15 +345,21 @@ class GraphRepository:
         )
         for row in rows:
             other = row["canonical_name"]
-            if fuzz.ratio(canonical_name, other) >= self.settings.entity_match_threshold:
+            score = fuzz.ratio(canonical_name, other) / 100
+            if score >= self.settings.entity_match_threshold / 100:
                 tx.run(
                     """
                     MATCH (a:Entity {canonical_name: $a})
                     MATCH (b:Entity {canonical_name: $b})
-                    MERGE (a)-[:SAME_AS {method: 'rapidfuzz'}]-(b)
+                    MERGE (a)-[r:SAME_AS]-(b)
+                    ON CREATE SET r.method = 'rapidfuzz',
+                                  r.score = $score
+                    ON MATCH SET r.method = coalesce(r.method, 'rapidfuzz'),
+                                 r.score = coalesce(r.score, $score)
                     """,
                     a=canonical_name,
                     b=other,
+                    score=score,
                 )
 
     def get_langchain_graph(self):

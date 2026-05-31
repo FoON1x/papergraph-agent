@@ -39,6 +39,7 @@ temp/
 
 # Local data and experiment artifacts
 papers/
+papers_test/
 data/
 artifacts/
 outputs/

@@ -2,202 +2,124 @@
 
 [中文](#中文说明) | [English](#english)
 
-PaperGraph-Agent is a GraphRAG-oriented research literature ingestion and reasoning project built around **LangChain**, **LangGraph**, and **Neo4j**. It turns PDF papers into a traceable knowledge graph, supports hybrid retrieval over graph and vector signals, and answers research questions through an agent-style workflow.
+PaperGraph-Agent is a research-paper GraphRAG MVP built with **LangChain**, **LangGraph**, and **Neo4j**. It parses academic PDFs, extracts structured scientific knowledge, stores both graph data and embeddings in Neo4j, and answers questions through an agent-based query workflow.
 
-The current repository is an **MVP that already supports end-to-end execution**:
+The project already supports an end-to-end loop:
 
-- initialize Neo4j schema
-- ingest one PDF or a directory of PDFs
-- extract paper structure and scientific knowledge
-- write graph data and embeddings into Neo4j
-- query the knowledge base through a LangChain/LangGraph agent
+- initialize Neo4j schema and vector indexes
+- ingest a single PDF or a directory of PDFs
+- build a traceable graph over papers, chunks, entities, claims, and evidence
+- run hybrid retrieval over vector and graph signals
+- answer research questions through a guarded LangChain/LangGraph agent
 
 ---
 
 ## 中文说明
 
-### 1. 项目简介
+### 1. 当前项目能做什么
 
-PaperGraph-Agent 是一个面向科研文献场景的 GraphRAG 项目，目标是把论文从“纯文本 PDF”变成“可追溯、可连接、可检索、可推理”的知识图谱。
+PaperGraph-Agent 目前已经具备一条可运行的 GraphRAG 主链路：
 
-当前版本聚焦于一条可运行的 MVP 主链路：
+1. 解析科研论文 PDF
+2. 将论文切分为可检索的 chunk
+3. 对每个 chunk 做结构化科研语义抽取
+4. 将文档结构、语义节点、实体关系和 embedding 一起写入 Neo4j
+5. 通过 Agent 组合向量检索、图查询和跨论文对照来回答问题
 
-1. 解析 PDF 文献
-2. 抽取科研语义信息
-3. 写入 Neo4j 图数据库与向量索引
-4. 用 LangChain / LangGraph Agent 对图谱进行查询与回答
+它现在更像一个**研究型 MVP / 可演示原型**，而不是生产系统，但导入与查询闭环已经打通。
 
-### 2. 核心能力
+### 2. 核心功能
 
-- **基于 LangChain 的文档处理与结构化抽取**
-  - 使用 LangChain 文档加载器和文本切分器处理 PDF
-  - 使用 LLM 对 chunk 做科研语义抽取
+- **PDF 导入与解析**
+  - 支持导入单篇 PDF 或整个目录
+  - 基于 LangChain 文档加载与文本切分，将论文拆为 `Section` / `Chunk`
 
-- **基于 LangGraph 的流程编排**
-  - Ingestion 工作流采用 LangGraph 组织 `parse -> extract -> write`
-  - Query 工作流使用 LangChain Agent，并运行在 LangGraph 支撑的 agent runtime 上
+- **LangGraph 编排的抽取流程**
+  - 外层导入工作流：`parse -> extract -> write`
+  - 内层 chunk 抽取工作流：
+    `prepare_payload -> format_prompt -> extract_structured -> normalize -> validate`
+  - 当 structured output 失败时，会退回原始 JSON 文本路径再做解析与校验
 
-- **基于 Neo4j 的图谱与向量混合检索**
-  - 使用 `langchain-neo4j` 对接 `Neo4jGraph` 和 `Neo4jVector`
-  - 支持图谱查询、向量相似检索和面向 Agent 的工具调用
+- **科研语义抽取**
+  - 抽取对象包括：
+    - `Objective`
+    - `Approach`
+    - `Result`
+    - `Constraint`
+    - `Claim`
+    - `Evidence`
+    - `Entity`
+  - 对模型脏输出做字段规范化、别名兼容、实体过滤和 schema 校验
 
-- **面向科研文献的知识建模**
-  - 文档层：`Paper`, `Section`, `Chunk`
+- **Neo4j 图谱入库**
+  - 文档结构层：`Paper`, `Section`, `Chunk`
   - 语义层：`Evidence`, `Claim`, `Objective`, `Approach`, `Result`, `Constraint`
   - 实体层：`Entity`, `Method`, `Dataset`, `Metric`, `Task`, `Model`, `PaperConcept`
+  - 写入时同时生成 chunk embedding，供后续向量检索使用
 
-- **增量入库**
-  - 当前版本支持按论文标题归一化后进行跳过判断，避免同一篇论文反复导入
+- **图谱 + 向量混合检索**
+  - 基于 `Neo4jVector` 对 `Chunk.embedding` 做相似度搜索
+  - 检索结果可带回 chunk 关联的 `Evidence` / `Claim`
+  - 支持图查询和跨论文实体对照
 
-### 3. 项目结构
+- **Agent 问答**
+  - 使用 LangChain `create_agent(...)`
+  - 工具包括：
+    - `vector_match`
+    - `query_graph`
+    - `cross_ref`
+  - 已加入工具调用上限、只读 Cypher 校验和工具错误兜底
+
+- **增量导入**
+  - 当前通过归一化标题判断是否跳过已存在论文
+  - 适合维护一个本地文献库
+
+- **实体相似对齐**
+  - 支持建立 `SAME_AS` 候选关系
+  - 若 Neo4j 已启用 APOC，则优先使用 `apoc.text.sorensenDiceSimilarity(...)`
+  - 若 APOC 不可用，会退回 Python 侧 `rapidfuzz` fallback
+
+### 3. 代码结构
 
 ```text
 src/paperagent/
-├── agent/         # LangChain Agent / LangGraph query workflow
-├── extraction/    # LLM extraction prompts and normalization
+├── agent/         # LangChain agent and tool-guarded query workflow
+├── extraction/    # prompts, chunk workflow, normalization, extraction service
 ├── graph/         # Neo4j schema, repository, graph utilities
-├── ingestion/     # PDF parsing and LangGraph ingestion workflow
-├── providers/     # DashScope/Qwen model provider abstraction
-├── retrieval/     # LangChain retriever and local GraphRAG logic
+├── ingestion/     # PDF parsing, workflow, pipeline
+├── providers/     # DashScope/Qwen chat and embedding provider abstraction
+├── retrieval/     # retriever and local GraphRAG answer path
 ├── cli.py         # Typer CLI entrypoint
-├── config.py      # Environment-driven settings
-└── schemas.py     # Core Pydantic schemas
+├── config.py      # environment-driven settings
+└── schemas.py     # core Pydantic schemas
 ```
 
 ### 4. 技术栈
 
-- **编排层**：LangChain, LangGraph
+- **编排**：LangChain, LangGraph
 - **图数据库 / 向量检索**：Neo4j, langchain-neo4j
-- **解析层**：Unstructured PDF Loader
-- **模型层**：DashScope-compatible Qwen chat and embedding models
-- **配置与验证**：Pydantic Settings
+- **模型**：DashScope-compatible Qwen chat + embedding models
+- **PDF 解析**：Unstructured
+- **配置**：Pydantic Settings
 - **CLI**：Typer + Rich
 
-### 5. 运行前准备
-
-#### 5.1 Python 版本
-
-- Python `>= 3.12`
-
-#### 5.2 安装依赖
-
-推荐使用 `uv`：
-
-```bash
-uv sync
-```
-
-如果你已经有虚拟环境，也可以使用：
-
-```bash
-uv pip install -e .
-```
-
-#### 5.3 配置环境变量
-
-将 `.env.example` 复制为 `.env`，并填写实际配置：
-
-```bash
-DASHSCOPE_API_KEY=your_api_key
-LLM_PROVIDER=dashscope
-CHAT_MODEL=qwen3.5-flash
-EMBEDDING_MODEL=text-embedding-v4
-PAPERAGENT_ENABLE_THINKING=false
-
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
-NEO4J_DATABASE=neo4j
-
-PAPERAGENT_CHUNK_SIZE=1200
-PAPERAGENT_CHUNK_OVERLAP=160
-PAPERAGENT_MAX_CONCURRENCY=1
-```
-
-建议首次跑通时使用：
-
-```bash
-PAPERAGENT_ENABLE_THINKING=false
-PAPERAGENT_MAX_CONCURRENCY=1
-```
-
-这样通常更稳。
-
-### 6. 全流程使用方法
-
-#### 第一步：检查本地依赖与连接
-
-```bash
-uv run paperagent doctor
-```
-
-这个命令会帮助检查：
-
-- Python 依赖是否齐全
-- DashScope key 是否可读取
-- Neo4j 是否可连接
-
-#### 第二步：初始化 Neo4j schema
-
-```bash
-uv run paperagent schema init --embedding-dimensions 1024
-```
-
-这个命令会在 Neo4j 中创建：
-
-- 唯一约束
-- 普通索引
-- 向量索引
-
-`1024` 需要与你使用的 embedding 模型输出维度一致。
-
-#### 第三步：导入论文
-
-导入单篇 PDF：
-
-```bash
-uv run paperagent ingest --input papers/example.pdf
-```
-
-导入一个目录下的全部 PDF：
-
-```bash
-uv run paperagent ingest --input papers --collection default
-```
-
-#### 第四步：发起查询
-
-```bash
-uv run paperagent query "总结这篇论文的核心方法和主要结果"
-```
-
-指定 collection 查询：
-
-```bash
-uv run paperagent query "GraphRAG 在这批论文中的主要应用场景是什么？" --collection default
-```
-
-#### 第五步：查看某篇论文节点摘要
-
-```bash
-uv run paperagent inspect --paper paper:xxxxxxxxxxxxxxxx
-```
-
-### 7. 当前系统的数据流
+### 5. 当前数据流
 
 ```text
 PDF
--> LangChain loader / splitter
--> chunk 级科研语义抽取
--> Pydantic schema 规范化
--> Neo4j graph + vector write
--> LangChain retriever / tools
--> LangGraph-backed agent query
+-> DocumentParser
+-> ParsedDocument / Chunk
+-> chunk-level extraction workflow
+-> normalized ChunkExtraction / PaperExtraction
+-> GraphRepository write
+-> Neo4j graph + vector index
+-> retriever + graph tools
+-> LangChain/LangGraph agent answer
 ```
 
-### 8. 当前实现的图谱模型
+### 6. 图谱模型
 
-#### 文档层
+#### 文档结构层
 
 - `Paper`
 - `Section`
@@ -233,152 +155,69 @@ PDF
 - `EVALUATED_ON`
 - `REPORTS_METRIC`
 - `FOR_TASK`
+- `ABOUT`
 - `SAME_AS`
 
-### 9. 当前状态与边界
+### 7. CLI 用法
 
-当前仓库已经可以完成导入与查询闭环，但它仍然是一个偏研究型的 MVP。
-
-目前已经具备：
-
-- 从 PDF 到图谱的基本链路
-- Neo4j 中的图/向量混合存储
-- 基于 LangChain / LangGraph 的查询路径
-- 基础增量导入能力
-
-目前仍值得继续打磨的地方包括：
-
-- 抽取速度与稳定性
-- 更稳的论文级去重策略
-- 更精细的实体对齐
-- 更强的全局社区检索与反思环路
-- 更完善的测试与评测
-
-### 10. 常见问题
-
-#### 导入速度较慢
-
-这通常来自以下几部分：
-
-- PDF 解析较重
-- chunk 数较多
-- 每个 chunk 都需要一次 LLM 抽取
-- Neo4j 写入前需要生成 embeddings
-
-如果你只是想先跑通系统，建议：
-
-- 关闭 thinking 模式
-- 将 `PAPERAGENT_MAX_CONCURRENCY` 设为 `1`
-- 先用少量论文验证流程
-
-#### 为什么 Neo4j 中节点很多
-
-因为系统不是“1 篇论文 = 1 个节点”，而是会拆成多层：
-
-- 论文结构节点
-- chunk 节点
-- claim / evidence 节点
-- entity 节点
-- 各类语义关系
-
-这是 GraphRAG 建模的一部分。
-
-### 11. 开源建议
-
-如果你准备公开发布这个仓库，建议：
-
-- 使用 `.env.example` 提供模板，不要提交真实 `.env`
-- 不要提交论文原文 PDF、实验输出、临时日志
-- 在提交前确认 Neo4j 连接信息、密钥和本地测试数据没有泄露
-
-### 12. License
-
-当前仓库尚未包含许可证文件。若准备正式开源，建议补充 `LICENSE`（如 MIT、Apache-2.0 等）。
-
----
-
-## English
-
-### 1. Overview
-
-PaperGraph-Agent is a GraphRAG-oriented project for research-paper ingestion, knowledge extraction, and question answering. It converts academic PDFs into a traceable knowledge graph that can be searched through both graph and vector signals.
-
-The current repository focuses on a practical MVP pipeline:
-
-1. parse papers from PDF
-2. extract scientific knowledge from chunks
-3. write graph data and embeddings into Neo4j
-4. answer research questions with a LangChain/LangGraph agent
-
-### 2. Features
-
-- **LangChain-based document handling and extraction**
-  - PDF loading and chunking through LangChain components
-  - LLM-powered scientific knowledge extraction per chunk
-
-- **LangGraph-based orchestration**
-  - ingestion workflow organized as `parse -> extract -> write`
-  - query path driven by a LangChain agent running on LangGraph-backed runtime
-
-- **Neo4j graph + vector hybrid retrieval**
-  - integration through `langchain-neo4j`
-  - support for graph querying, vector similarity search, and agent tools
-
-- **Research-aware knowledge model**
-  - document layer: `Paper`, `Section`, `Chunk`
-  - semantic layer: `Evidence`, `Claim`, `Objective`, `Approach`, `Result`, `Constraint`
-  - entity layer: `Entity`, `Method`, `Dataset`, `Metric`, `Task`, `Model`, `PaperConcept`
-
-- **Incremental ingestion**
-  - the current version can skip already indexed papers based on normalized title matching
-
-### 3. Repository Layout
-
-```text
-src/paperagent/
-├── agent/         # LangChain agent and query workflow
-├── extraction/    # prompts and extraction normalization
-├── graph/         # Neo4j schema and repository logic
-├── ingestion/     # PDF parsing and LangGraph ingestion workflow
-├── providers/     # model provider abstraction
-├── retrieval/     # retriever and local GraphRAG logic
-├── cli.py         # Typer CLI entrypoint
-├── config.py      # environment-based settings
-└── schemas.py     # Pydantic schemas
-```
-
-### 4. Tech Stack
-
-- **Orchestration**: LangChain, LangGraph
-- **Graph / vector storage**: Neo4j, langchain-neo4j
-- **PDF parsing**: Unstructured PDF loader
-- **LLM / embeddings**: DashScope-compatible Qwen models
-- **Configuration**: Pydantic Settings
-- **CLI**: Typer + Rich
-
-### 5. Prerequisites
-
-#### 5.1 Python
-
-- Python `>= 3.12`
-
-#### 5.2 Install dependencies
-
-Using `uv` is recommended:
+#### 7.1 检查环境
 
 ```bash
-uv sync
+uv run paperagent doctor
 ```
 
-Or install the project into an existing environment:
+#### 7.2 初始化 Neo4j schema
 
 ```bash
-uv pip install -e .
+uv run paperagent schema init --embedding-dimensions 1024
 ```
 
-#### 5.3 Configure environment variables
+这一步会创建：
 
-Copy `.env.example` to `.env` and fill in real values:
+- 唯一约束
+- 普通索引
+- 向量索引
+
+#### 7.3 导入论文
+
+导入单篇 PDF：
+
+```bash
+uv run paperagent ingest --input papers/example.pdf
+```
+
+导入目录中的全部 PDF：
+
+```bash
+uv run paperagent ingest --input papers --collection default
+```
+
+当前命令会统计：
+
+- `Ingested N paper(s)`
+- `Skipped M existing paper(s)`
+
+#### 7.4 查询知识库
+
+```bash
+uv run paperagent query "总结这篇论文的核心方法和主要结果"
+```
+
+指定 collection：
+
+```bash
+uv run paperagent query "GraphRAG 在这批论文中的主要应用场景是什么？" --collection default
+```
+
+#### 7.5 查看单篇论文摘要
+
+```bash
+uv run paperagent inspect --paper paper:xxxxxxxxxxxxxxxx
+```
+
+### 8. 环境变量
+
+最常见的配置项包括：
 
 ```bash
 DASHSCOPE_API_KEY=your_api_key
@@ -395,183 +234,276 @@ NEO4J_DATABASE=neo4j
 PAPERAGENT_CHUNK_SIZE=1200
 PAPERAGENT_CHUNK_OVERLAP=160
 PAPERAGENT_MAX_CONCURRENCY=1
+PAPERAGENT_MAX_TOOL_CALLS=4
+PAPERAGENT_MAX_TOOL_FAILURES=1
+PAPERAGENT_ENTITY_MATCH_THRESHOLD=90
 ```
 
-For the first successful run, the safest setup is usually:
+首次跑通建议：
 
 ```bash
 PAPERAGENT_ENABLE_THINKING=false
 PAPERAGENT_MAX_CONCURRENCY=1
 ```
 
-### 6. End-to-End Usage
+### 9. 当前状态与边界
 
-#### Step 1: Check local prerequisites
+当前仓库已经实现：
+
+- 论文导入闭环
+- chunk 级结构化抽取
+- Neo4j 图谱与向量存储
+- Agent 问答闭环
+- 基础增量导入
+- 基础实体相似对齐
+
+但它仍然属于 MVP，后续仍值得继续打磨：
+
+- 更稳的论文级去重策略
+- 更细的图谱扩展与 rerank
+- 更完善的多轮对话状态管理
+- 更强的评测、测试与回归验证
+- 更统一的仓储层查询风格
+
+### 10. FAQ
+
+#### 导入为什么比较慢？
+
+主要瓶颈通常在：
+
+- PDF 解析
+- chunk 数量
+- 每个 chunk 的 LLM 抽取
+- embedding 生成
+
+#### 为什么 Neo4j 里节点很多？
+
+因为系统不是“1 篇论文 = 1 个节点”，而是会拆成：
+
+- 文档结构节点
+- chunk 节点
+- 语义节点
+- 实体节点
+- 它们之间的关系
+
+这正是 GraphRAG 建模的一部分。
+
+#### 必须安装 APOC 吗？
+
+不是必须。
+
+- 若安装并启用 APOC，`SAME_AS` 对齐会优先走库内 Sorensen-Dice 相似度
+- 若没有 APOC，代码会退回到 Python 侧 `rapidfuzz`
+
+### 11. 开源提醒
+
+公开发布前请确认：
+
+- 不要提交真实 `.env`
+- 不要提交论文 PDF、日志、临时输出
+- 不要泄露 Neo4j 凭据和 API key
+
+### 12. License
+
+仓库目前还没有正式许可证文件；若准备公开发布，建议补充 `LICENSE`（如 MIT 或 Apache-2.0）。
+
+---
+
+## English
+
+### 1. What the project currently does
+
+PaperGraph-Agent currently supports a working GraphRAG loop for research papers:
+
+1. parse academic PDFs
+2. split them into retrievable chunks
+3. extract structured scientific knowledge per chunk
+4. write graph data and embeddings into Neo4j
+5. answer questions through an agent that combines vector retrieval and graph tools
+
+This repository should still be viewed as an **MVP / research prototype**, but the ingest-and-query loop is already functional.
+
+### 2. Core capabilities
+
+- **PDF ingestion and parsing**
+  - ingest a single PDF or an entire directory
+  - build `Section` / `Chunk` structure from papers
+
+- **LangGraph-driven extraction**
+  - outer ingestion workflow: `parse -> extract -> write`
+  - inner chunk workflow:
+    `prepare_payload -> format_prompt -> extract_structured -> normalize -> validate`
+  - fallback from structured output to raw JSON parsing when needed
+
+- **Scientific knowledge extraction**
+  - extracts:
+    - `Objective`
+    - `Approach`
+    - `Result`
+    - `Constraint`
+    - `Claim`
+    - `Evidence`
+    - `Entity`
+  - includes normalization, alias handling, entity filtering, and schema validation
+
+- **Neo4j graph persistence**
+  - document layer: `Paper`, `Section`, `Chunk`
+  - semantic layer: `Evidence`, `Claim`, `Objective`, `Approach`, `Result`, `Constraint`
+  - entity layer: `Entity`, `Method`, `Dataset`, `Metric`, `Task`, `Model`, `PaperConcept`
+  - chunk embeddings are written together with graph nodes
+
+- **Hybrid graph + vector retrieval**
+  - vector search over `Chunk.embedding` via `Neo4jVector`
+  - retrieval can return chunk-linked evidence and claim context
+  - supports graph querying and cross-paper entity lookup
+
+- **Agent-based QA**
+  - built on LangChain `create_agent(...)`
+  - tools:
+    - `vector_match`
+    - `query_graph`
+    - `cross_ref`
+  - includes tool-call limits, read-only Cypher validation, and tool error guards
+
+- **Incremental ingestion**
+  - skips already indexed papers by normalized title matching
+
+- **Entity similarity linking**
+  - builds `SAME_AS` candidate edges
+  - prefers APOC `apoc.text.sorensenDiceSimilarity(...)` when available
+  - falls back to Python-side `rapidfuzz` otherwise
+
+### 3. Repository layout
+
+```text
+src/paperagent/
+├── agent/         # LangChain agent and guarded query workflow
+├── extraction/    # prompts, chunk workflow, normalization, extraction service
+├── graph/         # Neo4j schema, repository, graph utilities
+├── ingestion/     # PDF parsing, workflow, pipeline
+├── providers/     # DashScope/Qwen model provider abstraction
+├── retrieval/     # retriever and local GraphRAG answer path
+├── cli.py         # Typer CLI entrypoint
+├── config.py      # environment-driven settings
+└── schemas.py     # core Pydantic schemas
+```
+
+### 4. Tech stack
+
+- **Orchestration**: LangChain, LangGraph
+- **Graph / vector storage**: Neo4j, langchain-neo4j
+- **Models**: DashScope-compatible Qwen chat + embedding models
+- **PDF parsing**: Unstructured
+- **Configuration**: Pydantic Settings
+- **CLI**: Typer + Rich
+
+### 5. CLI usage
+
+Check prerequisites:
 
 ```bash
 uv run paperagent doctor
 ```
 
-This checks:
-
-- Python dependencies
-- DashScope key availability
-- Neo4j connectivity
-
-#### Step 2: Initialize Neo4j schema
+Initialize Neo4j schema:
 
 ```bash
 uv run paperagent schema init --embedding-dimensions 1024
 ```
 
-This creates the required:
-
-- uniqueness constraints
-- indexes
-- vector indexes
-
-The dimension value must match the output size of your configured embedding model.
-
-#### Step 3: Ingest papers
-
-Ingest a single PDF:
+Ingest one paper:
 
 ```bash
 uv run paperagent ingest --input papers/example.pdf
 ```
 
-Ingest all PDFs in a directory:
+Ingest a directory:
 
 ```bash
 uv run paperagent ingest --input papers --collection default
 ```
 
-#### Step 4: Query the knowledge base
+Query the knowledge base:
 
 ```bash
 uv run paperagent query "Summarize the core method and main results of this paper."
 ```
 
-Query a specific collection:
-
-```bash
-uv run paperagent query "What are the main GraphRAG application patterns in this collection?" --collection default
-```
-
-#### Step 5: Inspect one paper node
+Inspect one paper:
 
 ```bash
 uv run paperagent inspect --paper paper:xxxxxxxxxxxxxxxx
 ```
 
-### 7. Data Flow
+### 6. Data flow
 
 ```text
 PDF
--> LangChain loader / splitter
--> chunk-level scientific extraction
--> Pydantic normalization
--> Neo4j graph + vector write
--> LangChain retriever / tools
--> LangGraph-backed agent query
+-> DocumentParser
+-> ParsedDocument / Chunk
+-> chunk-level extraction workflow
+-> normalized ChunkExtraction / PaperExtraction
+-> GraphRepository write
+-> Neo4j graph + vector index
+-> retriever + graph tools
+-> LangChain/LangGraph agent answer
 ```
 
-### 8. Graph Model
+### 7. Current status
 
-#### Document layer
+The project already includes:
 
-- `Paper`
-- `Section`
-- `Chunk`
-
-#### Scientific semantic layer
-
-- `Evidence`
-- `Claim`
-- `Objective`
-- `Approach`
-- `Result`
-- `Constraint`
-
-#### Entity layer
-
-- `Entity`
-- `Method`
-- `Dataset`
-- `Metric`
-- `Task`
-- `Model`
-- `PaperConcept`
-
-#### Common relationships
-
-- `HAS_SECTION`
-- `HAS_CHUNK`
-- `HAS_EVIDENCE`
-- `SUPPORTS`
-- `MENTIONS`
-- `USES_METHOD`
-- `EVALUATED_ON`
-- `REPORTS_METRIC`
-- `FOR_TASK`
-- `SAME_AS`
-
-### 9. Current Status
-
-This repository already supports a working ingest-and-query loop, but it should still be viewed as an MVP rather than a production system.
-
-It already includes:
-
-- a working PDF-to-graph pipeline
-- graph and vector storage in Neo4j
-- a LangChain / LangGraph-based query path
+- an end-to-end ingestion loop
+- chunk-level structured extraction
+- Neo4j graph and vector storage
+- an agent-based QA loop
 - basic incremental ingestion
+- basic entity similarity linking
 
 Areas still worth improving:
 
-- extraction speed and robustness
 - stronger paper-level deduplication
-- more precise entity alignment
-- richer global retrieval and reflection loops
+- richer graph expansion and reranking
+- cleaner multi-turn state handling
 - broader testing and evaluation
+- more consistent repository-layer query style
 
-### 10. FAQ
+### 8. FAQ
 
 #### Why is ingestion slow?
 
-The heavy parts are usually:
+Typical bottlenecks are:
 
 - PDF parsing
-- large chunk counts
+- chunk count
 - one LLM extraction call per chunk
-- embedding generation before writing to Neo4j
-
-If your main goal is to get the system running first, start with:
-
-- thinking mode disabled
-- `PAPERAGENT_MAX_CONCURRENCY=1`
-- a small paper set
+- embedding generation
 
 #### Why are there so many nodes in Neo4j?
 
-Because the graph is not modeled as “one paper equals one node.” A single paper can produce:
+Because the graph is not modeled as “one paper = one node”. A single paper expands into:
 
 - document structure nodes
 - chunk nodes
-- claim and evidence nodes
+- semantic nodes
 - entity nodes
-- many typed relationships
+- and the relationships among them
 
-That is expected in a GraphRAG-style design.
+#### Is APOC required?
 
-### 11. Open-Source Checklist
+Not strictly.
 
-Before publishing this repository, make sure:
+- If APOC is installed and enabled, `SAME_AS` linking runs inside Neo4j with Sorensen-Dice similarity
+- Otherwise the code falls back to Python-side `rapidfuzz`
 
-- only `.env.example` is committed, not a real `.env`
-- paper PDFs, temporary logs, and local outputs are ignored
-- no API keys or local Neo4j credentials remain in tracked files
+### 9. Open-source note
 
-### 12. License
+Before publishing, make sure:
 
-This repository does not yet include a license file. If you plan to open-source it, consider adding a `LICENSE` file such as MIT or Apache-2.0.
+- no real `.env` is committed
+- paper PDFs, local logs, and temporary outputs are ignored
+- no Neo4j credentials or API keys remain in tracked files
+
+### 10. License
+
+The repository does not yet include a formal license file. If you plan to open-source it, consider adding MIT or Apache-2.0.

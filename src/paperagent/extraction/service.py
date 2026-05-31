@@ -9,6 +9,7 @@ from langgraph.func import entrypoint, task
 from langgraph.graph import StateGraph, START, END
 
 from paperagent.config import Settings, get_settings
+from paperagent.extraction.chunk_workflow import build_chunk_extraction_workflow
 from paperagent.extraction.prompts import EXTRACTION_HUMAN_PROMPT, EXTRACTION_SYSTEM_PROMPT
 from paperagent.providers import ChatProvider, get_chat_provider
 from paperagent.schemas import ChunkExtraction, Claim, Entity, EntityType, Evidence, ParsedDocument, PaperExtraction
@@ -30,10 +31,15 @@ class ExtractionService:
     ) -> None:
         self.settings = settings or get_settings()
         self.chat_provider = chat_provider or get_chat_provider(self.settings)
+        # raw_model 保留为普通聊天模型，供 fallback JSON 路径复用。
+        self.raw_model = self.chat_provider.get_chat_model()
         self.structured_model = (
-            self.chat_provider.get_chat_model()
+            self.raw_model
             .with_structured_output(ChunkExtraction, method="json_mode")
         )
+        # 正式生产路径走独立文件里的完整 LangGraph 工作流。
+        self.workflow = build_chunk_extraction_workflow(self)
+        # 这条 chain 继续保留，便于对照学习 functional API 的最小写法。
         self.chain = self._build_chain_by_functional()
 
     async def extract_document(self, document: ParsedDocument) -> PaperExtraction:
@@ -51,10 +57,9 @@ class ExtractionService:
 
         async def extract_one(payload: dict) -> ChunkExtraction:
             async with semaphore:
-                # 每个 chunk 独立抽取；一旦模型输出不稳定，后续会进入 _coerce_extraction 做兜底。
-                return await self.chain.ainvoke(payload)
-                # raw_output = await self.chain.ainvoke(payload)
-                # return self._coerce_extraction(raw_output, payload["chunk_id"])
+                # 正式路径走完整工作流；其中已经包含 structured -> fallback -> normalize -> validate。
+                result = await self.workflow.ainvoke({"payload": payload})
+                return result["extraction"]
 
         extractions = await asyncio.gather(*(extract_one(payload) for payload in inputs))
         for chunk, extraction in zip(document.chunks, extractions, strict=False):
@@ -75,15 +80,17 @@ class ExtractionService:
         这个函数更适合调试或单元测试；正常导入流程会走 extract_document。
         """
         return asyncio.run(
-            self.chain.ainvoke(
+            self.workflow.ainvoke(
                 {
-                    "paper_id": paper_id,
-                    "chunk_id": chunk_id,
-                    "page_number": page_number or "unknown",
-                    "chunk_text": chunk_text,
+                    "payload": {
+                        "paper_id": paper_id,
+                        "chunk_id": chunk_id,
+                        "page_number": page_number or "unknown",
+                        "chunk_text": chunk_text,
+                    }
                 }
             )
-        )
+        )["extraction"]
 
     
     
